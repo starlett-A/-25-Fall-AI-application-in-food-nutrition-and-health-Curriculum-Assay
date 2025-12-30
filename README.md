@@ -14,7 +14,6 @@ Coding backup : Sarcopenia Metabolomics
 1. `01_data_preprocessing.R` - 数据清洗与预处理
 2. `02_plsda_analysis.R` - PLS-DA分析与VIP筛选
 3. `03_machine_learning.R` - 机器学习特征选择
-4. `04_visualization.R` - 结果可视化
 
 ## 运行环境
 - R version 4.5.2
