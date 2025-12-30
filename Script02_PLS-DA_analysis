@@ -1,0 +1,170 @@
+
+
+# PLS-DA analysis
+# Date:2025-12-29
+
+# 1. Loading necessary packages -------------------------------------------------
+library(ropls)   # Core analysis package
+library(ggplot2) # Picturing package
+library(dplyr)   # Data processing package
+
+setwd("D:/R_homework")
+
+# 2. Creating Sample groups -------------------------------------------------
+cat("\n3. Creating sample groups...\n")
+# Note: use the filtered data with the same sample groups
+sample_names <- rownames(data_matrix_filtered)  # Use the filtered sample names
+
+# Method: Making groups according to whether the sample name contains "Young" or "Old"
+group_vector <- ifelse(grepl("Young", sample_names, ignore.case = TRUE), 
+                       "Young", 
+                       ifelse(grepl("Old", sample_names, ignore.case = TRUE), 
+                              "Old", NA))
+
+# 3. Checking the groups -------------------------------------------------
+if (any(is.na(group_vector))) {
+  cat("⚠️  Warnings: Some sample names are not matched with neither 'Young' or 'Old' and will be grouped by its default order.\n")
+  n_samples <- length(sample_names)
+  group_vector <- c(rep("Young", floor(n_samples/2)), rep("Old", ceiling(n_samples/2)))
+}
+
+group_factor <- as.factor(group_vector)
+names(group_factor) <- sample_names
+
+cat("  Done with grouping. Details:\n")
+print(table(group_factor))
+cat("  Grouping details:\n") 
+print(data.frame(Sample = names(group_factor), Group = group_factor, row.names = NULL))
+
+# 4. ropls package: PLS-DA analysis -----------------------------------------
+cat("\n4. Building PLS-DA model...\n")
+set.seed(123) # random number seeds for reproducibility 
+
+# Use the data_matrix after data preprocessing
+plsda_result <- opls(x = data_matrix_filtered,   # Use preprocessed data
+                     y = group_factor,           # Grouping factor
+                     predI = 2,                  # Principal Components 
+                     scaleC = "standard",        # ropls's own way of normalization(scaleC= standard)
+                     info.txtC = "none",         # no long and complex info output
+                     fig.pdfC = "none")          # no auto-save PDF ver.
+
+cat("  ✅  Successfully built PLS-DA model! \n")
+
+
+# 5. Checking the results -----------------------------------------------------
+cat("\n5. Abstract for PLS-DA model running results: \n")
+print(plsda_result)
+
+# 6. Extracting VIP scores ----------------------------------------------------------
+cat("\n6. Extracting VIP scores...\n")
+vip_values <- getVipVn(plsda_result)
+vip_sorted <- sort(vip_values, decreasing = TRUE)
+
+# Selecting metabolites VIP > 1 Core result: Found %d metabolites whose VIP > 1!
+significant_idx <- vip_sorted > 1
+significant_metabolites <- vip_sorted[significant_idx]
+
+cat(sprintf("  🎉 Core result: Found %d metabolites whose VIP > 1!\n", 
+            length(significant_metabolites)))
+
+# 7. Saving results-------------------------------------------------
+cat("\n7. Saving results...\n")
+
+# 7.1 Saving VIP scores
+full_vip_df <- data.frame(
+  Metabolite = names(vip_sorted),
+  VIP_Score = round(vip_sorted, 4),
+  VIP_Greater_Than_1 = vip_sorted > 1,
+  stringsAsFactors = FALSE
+)
+write.csv(full_vip_df, "ropls_Full_VIP_Results.csv", row.names = FALSE)
+
+# 7.2 Saving metabolite table whose VIP > 1 Done with saving PLS-DA results!
+sig_vip_df <- data.frame(
+  Metabolite = names(significant_metabolites),
+  VIP_Score = round(significant_metabolites, 4),
+  stringsAsFactors = FALSE
+)
+sig_vip_df <- sig_vip_df[order(-sig_vip_df$VIP_Score), ]
+write.csv(sig_vip_df, "ropls_Significant_Metabolites_VIP_gt_1.csv", row.names = FALSE)
+
+cat("  ✅ Done with saving PLS-DA results!\n")  
+cat("     - ropls_Full_VIP_Results.csv \n")
+cat("     - ropls_Significant_Metabolites_VIP_gt_1.csv\n")
+
+# 8. Displaying Top 10 VIP metabolites ------------------------------------------------
+cat("\n8. Top 10 VIP metabolites: \n")
+top10_to_display <- head(sig_vip_df, 10)
+print(top10_to_display)
+
+# 9. Creating analysis graphs -------------------------------------------------------
+cat("\n9. Creating analysis graphs...\n")
+
+# 9.1 PLS-DA Score plot saving
+png("ropls_PLSDA_Score_Plot.png", width = 8, height = 6, units = "in", res = 300)
+plot(plsda_result, typeVc = "x-score", parAsColFcVn = group_factor)
+dev.off()
+cat("  ✅ Samplse score plot saved as 'ropls_PLSDA_Score_Plot.png'\n")
+
+# PDF ver.
+pdf("Fig1_PLSDA_Score_Clean.pdf", width = 8, height = 6)
+plot(plsda_result, typeVc = "x-score", parAsColFcVn = group_factor)
+dev.off()
+cat("✅ Saved as 'Fig1_PLSDA_Score_Clean.pdf'。\n")
+
+
+# 9.2 VIP bar plot
+cat("\n9.2 Creating VIP bar plot...\n")
+top_n_to_show <- 15
+plot_data <- head(sig_vip_df, top_n_to_show)
+plot_data$Metabolite <- factor(plot_data$Metabolite, levels = rev(plot_data$Metabolite))
+
+vip_bar_plot <- ggplot(plot_data, aes(x = VIP_Score, y = Metabolite, fill = VIP_Score)) +
+  geom_col(width = 0.7) +
+  scale_fill_gradient(low = "#3498DB", high = "#E74C3C", name = "VIP Score") +
+  labs(
+    x = "Variable Importance in Projection (VIP) Score",
+    y = NULL,
+    title = paste("Top", top_n_to_show, "Metabolites by VIP Score"),
+    subtitle = paste("Higher VIP indicates greater contribution to distinguishing Young vs Old groups")
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    axis.text.y = element_text(size = 10),
+    panel.grid.major.y = element_blank()
+  ) +
+  geom_vline(xintercept = 1.0, linetype = "dashed", color = "black", alpha = 0.7)
+
+ggsave("VIP_TopMetabolites_BarChart.png", vip_bar_plot, width = 10, height = 6, dpi = 600)
+ggsave("VIP_TopMetabolites_BarChart_FINAL.pdf", vip_bar_plot, width = 10, height = 6, device = "pdf")
+cat("✅ Done with saving VIP bar plot\n")
+
+# 10.  Generating analysis report ---------------------------------------------------
+cat("\n10. Generating analysis report...\n")
+
+# Saving data_processing abstract 
+# Note: R2Y(cum) and Q2(cum) could contain multiple values, choose the last one(the cumulative one)
+r2y_value <- tail(plsda_result@modelDF$`R2Y(cum)`, 1)
+q2_value <- tail(plsda_result@modelDF$`Q2(cum)`, 1)
+
+preprocessing_summary <- data.frame(
+  Item = c("Original metabolite count", "Filtered metabolite count", "Sample total count", 
+         "Group Young sample count", "Group Old sample count", "Zero value rate", 
+         "VIP > 1 metabolite count", "Model R2Y", "Model Q2"),
+  Value = c(ncol(data_matrix), 
+         ncol(data_matrix_filtered), 
+         nrow(data_matrix_filtered),
+         sum(group_factor == "Young"), 
+         sum(group_factor == "Old"),
+         paste0(zero_percent, "%"),
+         length(significant_metabolites),
+         round(r2y_value, 3),
+         round(q2_value, 3)),
+  stringsAsFactors = FALSE
+)
+
+write.csv(preprocessing_summary, "Preprocessing_Analysis_Summary.csv", row.names = FALSE)
+cat("  ✅ Done with saving preprocessing analysis summary.\n")
+
