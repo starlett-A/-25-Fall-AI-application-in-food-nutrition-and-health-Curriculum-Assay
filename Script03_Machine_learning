@@ -1,0 +1,424 @@
+
+# machine learning Machine learing results and PLS-DA results cross-validation
+# Date:2025-12-29
+
+
+cat("========================================\n")
+cat("  Machine learing results and PLS-DA results cross-validation\n")
+cat("========================================\n\n")
+
+# Processing necessary packages
+library(randomForest)
+library(glmnet)
+library(e1071)
+library(caret)
+library(VennDiagram)
+library(RColorBrewer)
+library(ggplot2)
+library(dplyr) 
+library(tidyr)      # For data-rebuild
+library(reshape2)   # Substitute for pivot_longer
+library(pROC)       # For ROC analysis
+
+
+setwd("D:/R_homework")
+
+set.seed(123)  # random number seeds for reproducibility 
+
+# 1. Extract ropls data and results
+cat("1. Extracting ropls data and results...\n")
+
+# checking whether ropls results are there
+if(!exists("plsda_result")) {
+  stop("❌ Results not found! Run script02 first!")
+}
+
+if(!exists("data_matrix")) {
+  stop("❌ Data matrix not found! Run script02 first!")
+}
+
+if(!exists("group_factor")) {
+  stop("❌  Group factor not found! Run script02 first!")
+}
+
+# Read pls-da VIP results -Top 1 metabolites:
+vip_results <- read.csv("ropls_Significant_Metabolites_VIP_gt_1.csv", 
+                        stringsAsFactors = FALSE)
+selected_vip <- vip_results$Metabolite
+vip_scores <- setNames(vip_results$VIP_Score, vip_results$Metabolite)
+
+cat("✅ Got pls-da results:\n")
+cat("   -Total metabolites:", length(selected_vip), "(VIP>1)\n")
+cat("   -Top 1 metabolites:", selected_vip[1], "(VIP=", vip_scores[selected_vip[1]], ")\n\n")
+
+# 2. Data preparing (use ropls preprocessed data matrix)
+cat("2. Machine learning data preparing...\n")
+
+# Use the same normalized data as ropls 
+X <- scale(data_matrix)  # Standardization (consistent with ropls)
+Y <- group_factor
+Y_numeric <- ifelse(Y == "Young", 0, 1)  # Convert to 0/1 for glmnet
+
+cat("  Data matrix dimensions: ", dim(X), "(samples × metabolites)\n")
+cat("  Groups: Young (n=", sum(Y=="Young"), "), Old (n=", sum(Y=="Old"), ")\n\n", sep="")
+
+# 3. Method 1: Random Forest feature selection
+cat("3. Random Forest feature selection...\n")
+rf_model <- randomForest(x = X, y = Y,
+                         ntree = 1000,
+                         importance = TRUE,
+                         proximity = TRUE)
+
+# Get feature importance (using mean decrease in accuracy)
+importance_rf <- importance(rf_model, type = 1)
+importance_df <- data.frame(
+  Metabolite = rownames(importance_rf),
+  Importance = importance_rf[, 1]
+) %>% arrange(desc(Importance))
+
+# Filter: select metabolites with importance greater than the mean
+threshold_rf <- mean(importance_df$Importance)
+selected_rf <- importance_df$Metabolite[importance_df$Importance > threshold_rf]
+
+cat("  Random Forest selected", length(selected_rf), "metabolites (importance > mean)\n")
+
+# Visualize Random Forest feature importance (Top 20)
+rf_top20 <- head(importance_df, 20)
+rf_top20$Metabolite <- factor(rf_top20$Metabolite, 
+                              levels = rev(rf_top20$Metabolite))
+
+p_rf <- ggplot(rf_top20, aes(x = Importance, y = Metabolite, fill = Importance)) +
+  geom_col(width = 0.7) +
+  scale_fill_gradient(low = "#3498DB", high = "#E74C3C", name = "Importance") +
+  labs(x = "Random Forest Value Importance (MeanDecreaseAccuracy)",
+       y = NULL,
+       title = "Random Forest Importance Value Rank (Top 20)",
+       subtitle = "To distinguish metabolites from group Young and group Old") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.y = element_text(size = 9))
+
+ggsave("RF_Feature_Importance_Top20.png", p_rf, width = 10, height = 7, dpi = 300)
+cat("  ✅ 随Random Forest feature importance plot saved\n")
+
+# 4. Method 2: Lasso regression feature selection
+cat("\n4. Lasso regression feature selection...\n")
+cv_fit <- cv.glmnet(X, Y_numeric,
+                    family = "binomial",
+                    alpha = 1,
+                    nfolds = 5)
+
+lasso_coef <- coef(cv_fit, s = "lambda.min")
+selected_lasso <- rownames(lasso_coef)[which(lasso_coef != 0)]
+selected_lasso <- selected_lasso[selected_lasso != "(Intercept)"]
+
+# Get coefficient values
+if(length(selected_lasso) > 0) {
+  lasso_coef_values <- as.numeric(lasso_coef[selected_lasso, ])
+  lasso_coef_df <- data.frame(
+    Metabolite = selected_lasso,
+    Coefficient = lasso_coef_values
+  ) %>% arrange(desc(abs(Coefficient)))
+} else {
+  lasso_coef_df <- data.frame(Metabolite = character(), Coefficient = numeric())
+}
+
+cat("  Lasso regression selected", length(selected_lasso), "metabolites\n")
+
+# Visualize Lasso coefficients
+if(nrow(lasso_coef_df) > 0) {
+  lasso_top20 <- head(lasso_coef_df, 20)
+  lasso_top20$Metabolite <- factor(lasso_top20$Metabolite,
+                                   levels = rev(lasso_top20$Metabolite))
+  
+  p_lasso <- ggplot(lasso_top20, aes(x = Coefficient, y = Metabolite, 
+                                     fill = Coefficient > 0)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = c("red", "blue"), 
+                      labels = c("Negatively Associated", "Positively Associated"),
+                      name = "Association with Sarcopenia") +
+    labs(x = "Lasso Regression Coefficients",
+         y = NULL,
+         title = "Metabolites and Coeffients by Lasso Regression (Top 20)",
+         subtitle = "Positive associations stands for up-regulation in group Old") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5),
+          axis.text.y = element_text(size = 9))
+  
+  ggsave("Lasso_Coefficients_Top20.png", p_lasso, width = 10, height = 7, dpi = 600)
+  cat("  ✅ LaLasso coefficients plot saved\n")
+}
+
+# 5. Method 3: Linear SVM feature selection
+cat("\n5. Linear SVM feature selection...\n")
+svm_model <- svm(x = X, y = Y,
+                 kernel = "linear",
+                 cost = 1,
+                 scale = FALSE)
+
+# Get weight coefficients
+weights <- t(svm_model$coefs) %*% svm_model$SV
+weights_abs <- abs(as.vector(weights))
+
+svm_df <- data.frame(
+  Metabolite = colnames(X),
+  Weight = weights_abs
+) %>% arrange(desc(Weight))
+
+threshold_svm <- mean(svm_df$Weight)
+selected_svm <- svm_df$Metabolite[svm_df$Weight > threshold_svm]
+
+cat("  SVM selected", length(selected_svm), "metabolites (weight > mean)\n")
+
+# Visualize SVM weights (Top 20)
+svm_top20 <- head(svm_df, 20)
+svm_top20$Metabolite <- factor(svm_top20$Metabolite, 
+                               levels = rev(svm_top20$Metabolite))
+
+p_svm <- ggplot(svm_top20, aes(x = Weight, y = Metabolite, fill = Weight)) +
+  geom_col(width = 0.7) +
+  scale_fill_gradient(low = "#2ECC71", high = "#E67E22", name = "weight") +
+  labs(x = "SVM absolute weight ",
+       y = NULL,
+       title = "Linear SVM feature weight Rank (Top 20)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.y = element_text(size = 9))
+
+ggsave("SVM_Feature_Weights_Top20.png", p_svm, width = 10, height = 7, dpi = 600)
+cat("  ✅ Visualize SVM weights (Top 20)\n")
+
+# 6. Multi-method results comparison and integration
+cat("\n6. Multi-method results comparison and integration...\n")
+
+# Prepare comparison list
+feature_lists <- list(
+  PLS_DA = selected_vip,
+  RandomForest = selected_rf,
+  Lasso = selected_lasso,
+  SVM = selected_svm
+)
+
+# Remove empty lists
+feature_lists <- feature_lists[lapply(feature_lists, length) > 0]
+
+# Draw Venn diagram
+venn_colors <- brewer.pal(min(4, length(feature_lists)), "Set2")
+
+venn.plot <- venn.diagram(
+  x = feature_lists,
+  filename = NULL,
+  fill = venn_colors[1:length(feature_lists)],
+  alpha = 0.5,
+  cex = 1.2,
+  cat.cex = 1.2,
+  cat.fontface = "bold",
+  main = "Multi-methods Selection Results Comparison",
+  sub = "PLS-DA (VIP>1) vs. Machine Learning methods",
+  main.cex = 1.3,
+  main.fontface = "bold"
+)
+
+png("MultiMethod_Venn_Diagram.png", width = 8, height = 6, units = "in", res = 600)
+grid.draw(venn.plot)
+dev.off()
+cat("  ✅ Multi-method comparison Venn diagram saved\n")
+
+# Calculate how many times each metabolite was selected
+all_metabolites <- unique(unlist(feature_lists))
+presence_matrix <- matrix(0, nrow = length(all_metabolites), 
+                          ncol = length(feature_lists))
+rownames(presence_matrix) <- all_metabolites
+colnames(presence_matrix) <- names(feature_lists)
+
+for(method in names(feature_lists)) {
+  presence_matrix[feature_lists[[method]], method] <- 1
+}
+
+selected_counts <- rowSums(presence_matrix)
+
+# Filter high-confidence metabolites (selected by at least 2 methods)
+high_confidence_metabolites <- names(selected_counts[selected_counts >= 2])
+
+cat("\nHigh-confidence core metabolites (selected by at least 2 methods):\n")
+if(length(high_confidence_metabolites) > 0) {
+  cat("Found:", length(high_confidence_metabolites), "high-confidence metabolites:\n")
+  
+  # Get VIP scores for these metabolites
+  high_conf_df <- data.frame(
+    Metabolite = high_confidence_metabolites,
+    SelectedBy = selected_counts[high_confidence_metabolites],
+    VIP_Score = vip_scores[high_confidence_metabolites]
+  ) %>% arrange(desc(SelectedBy), desc(VIP_Score))
+  
+  print(high_conf_df)
+  
+  # Create summary table
+  summary_table <- data.frame(
+    Metabolite = all_metabolites,
+    SelectedBy = selected_counts,
+    PLS_DA = ifelse(all_metabolites %in% selected_vip, "✓", ""),
+    RandomForest = ifelse(all_metabolites %in% selected_rf, "✓", ""),
+    Lasso = ifelse(all_metabolites %in% selected_lasso, "✓", ""),
+    SVM = ifelse(all_metabolites %in% selected_svm, "✓", ""),
+    VIP_Score = vip_scores[all_metabolites]
+  ) %>% arrange(desc(SelectedBy), desc(VIP_Score))
+  
+  write.csv(summary_table, "MultiMethod_Feature_Selection_Summary.csv", row.names = FALSE)
+  cat("\n  ✅ 多Multi-method feature selection summary table saved\n")
+}
+
+# 7. Visualize high-confidence metabolites
+cat("\n7. Visualize high-confidence metabolites...\n")
+
+# Plot VIP score distribution of high-confidence metabolites
+p_high_conf <- ggplot(high_conf_df, 
+                      aes(x = reorder(Metabolite, VIP_Score), 
+                          y = VIP_Score, 
+                          fill = as.factor(SelectedBy))) +
+  geom_col(width = 0.7) +
+  coord_flip() +
+  labs(x = "Metabolite", y = "VIP Score",
+       title = "High Confidence Metabolites VIP score distribution",
+       subtitle = paste("Chosen by at least two models | Total metabolites:", nrow(high_conf_df), ""),
+       fill = "Chosen by (models)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.y = element_text(size = 9)) +
+  scale_fill_brewer(palette = "Set2")
+
+ggsave("High_Confidence_Metabolites_VIP.png", p_high_conf, width = 12, height = 9, dpi = 600)
+cat("  ✅ High-confidence metabolites VIP distribution plot saved!\n")
+
+
+# 8. Evaluate discriminative ability of high-confidence metabolites
+cat("\n8. Evaluating discriminative ability of high-confidence metabolites..\n")
+
+if(length(high_confidence_metabolites) >= 3) {
+  
+  # Only conduct exploratory analysis, not claiming predictive performance
+  cat("  Due to limited sample size (n=10), this study focuses on biomarker discovery rather than model construction\n")
+  cat("  Expression patterns of high-confidence metabolites between two groups:\n")
+  
+  # 8.1 Draw heatmap to show expression patterns
+  library(pheatmap)
+  
+  # Use Top 20 high-confidence metabolites
+  top_20_metabolites <- head(high_conf_df[order(-high_conf_df$SelectedBy, 
+                                                -high_conf_df$VIP_Score), ], 20)$Metabolite
+  
+  expr_top20 <- X[, top_20_metabolites]
+  
+  # Create annotations
+  annotation_col <- data.frame(Group = Y)
+  rownames(annotation_col) <- rownames(X)
+  
+  annotation_row <- data.frame(
+    SelectedBy = factor(high_conf_df$SelectedBy[match(top_20_metabolites, 
+                                                      high_conf_df$Metabolite)])
+  )
+  rownames(annotation_row) <- top_20_metabolites
+  
+  pheatmap(expr_top20,
+           scale = "row",
+           clustering_method = "complete",
+           annotation_col = annotation_col,
+           annotation_row = annotation_row,
+           show_colnames = TRUE,
+           show_rownames = TRUE,
+           fontsize_row = 8,
+           fontsize_col = 8,
+           color = colorRampPalette(c("blue", "white", "red"))(100),
+           main = "Top 20 High-Confidence Metabolites Expression Heatmap",
+           filename = "Top20_HighConfidence_Heatmap.png",
+           width = 8, height = 7)
+  
+  cat("  ✅ TTop 20 high-confidence metabolites heatmap saved\n")
+  
+  # 8.2 Simple descriptive statistics
+  cat("\n  Descriptive statistics of high-confidence metabolites:\n")
+  
+  # Group statistics by number of methods that selected them
+  method_counts <- table(high_conf_df$SelectedBy)
+  cat("   Distribution by number of selecting methods:\n")
+  for(i in 1:length(method_counts)) {
+    cat(sprintf("    Selected by %d methods: %d metabolites\n", 
+                as.numeric(names(method_counts)[i]), 
+                method_counts[i]))
+  }
+  
+  # 8.3 Top metabolites' regulation direction
+  cat("\n  Regulation direction of Top 5 high-confidence metabolites (Old vs Young):\n")
+  top5_expr <- X[, head(high_conf_df$Metabolite, 5)]
+  
+  # Calculate MEAN values for each group
+  for(i in 1:5) {
+    metab <- colnames(top5_expr)[i]
+    young_mean <- mean(top5_expr[Y == "Young", i])
+    old_mean <- mean(top5_expr[Y == "Old", i])
+    fold_change <- old_mean / young_mean
+    
+    direction <- ifelse(fold_change > 1, "Up-regulate", "Down-regulate")
+    cat(sprintf("    %d. %s: Group Old/Group Young = %.2f (%s)\n", 
+                i, metab, fold_change, direction))
+  }
+  
+} else {
+  cat("  Not enough high confidence metabolite (<3)\n")
+}
+
+# 9. Generating final analysis report
+cat("\n9. Generating final analysis report..\n")
+
+report <- data.frame(
+  Items = c("Total sample count", "Group Young sample count", "Group old sample count",
+           "Total metabolite count", "PLS-DA selected metabolite count(VIP>1)", "Random Forest selected sample count",
+           "Lasso Regression selected metabolite count", "SVM selected metabolite count", "High confidence core significant metabolite count",
+           "Chosen by all 4 methods metabolite count", "Chosen by 3 methods metabolite count"),
+  Values = c(length(Y), 
+         sum(Y=="Young"), sum(Y=="Old"),
+         ncol(X),
+         length(selected_vip),
+         length(selected_rf),
+         length(selected_lasso),
+         length(selected_svm),
+         length(high_confidence_metabolites),
+         sum(selected_counts == 4),
+         sum(selected_counts == 3))
+)
+
+write.csv(report, "Final_Analysis_Report.csv", row.names = FALSE) 
+cat("  ✅  Done with generating Final analysis report!\n")  
+
+# Output core results Random Forest selected  metabolites Done with generating Final analysis report
+cat("\n=======Core results=======\n")
+cat(sprintf("1. PLS-DA (traditional mutivariate statistics) selected %d VIP >1 metabolites\n", length(selected_vip)))
+cat(sprintf("2. Random Forest selected %d metabolites\n", length(selected_rf)))
+cat(sprintf("3. Lasso Regression selected %d metabolites\n", length(selected_lasso)))
+cat(sprintf("4. SVM selected %d metabolites\n", length(selected_svm)))
+cat(sprintf("5. High confidence significance metabolites(selected by at least 2 methods):%d 个\n", 
+            length(high_confidence_metabolites)))
+
+if(length(high_confidence_metabolites) > 0) {
+  cat("\n Top 5 High confidence metabolites: \n")
+  top5 <- head(high_conf_df, 5)
+  for(i in 1:nrow(top5)) {
+    cat(sprintf("   %d. %s (VIP=%.3f, Chosen by%d )\n", 
+                i, top5$Metabolite[i], top5$VIP_Score[i], top5$SelectedBy[i]))
+  }
+}
+
+cat("\n========================================\n")
+cat("  Done with machine learning feature selection analysis!\n")
+cat("  Please check the files generated: \n")
+cat("  1. *_Feature_Importance_*.png - * Feature Importance for each method *\n")
+cat("  2. MultiMethod_Venn_Diagram.png - MultiMethod Venn Diagram\n")
+cat("  3. MultiMethod_Feature_Selection_Summary.csv - MultiMethod feature selection summary\n")
+cat("  4. High_Confidence_Metabolites_VIP.png - High confidence metabolites with VIP\n")
+cat("  5. Final_Analysis_Report.csv - Final analysis report\n")
+cat("========================================\n")
+
