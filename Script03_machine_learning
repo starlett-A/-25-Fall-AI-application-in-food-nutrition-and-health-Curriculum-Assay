@@ -100,7 +100,7 @@ p_rf <- ggplot(rf_top20, aes(x = Importance, y = Metabolite, fill = Importance))
         axis.text.y = element_text(size = 9))
 
 ggsave("RF_Feature_Importance_Top20.png", p_rf, width = 10, height = 7, dpi = 300)
-cat("  ✅ 随Random Forest feature importance plot saved\n")
+cat("  ✅ Random Forest feature importance plot saved\n")
 
 # 4. Method 2: Lasso regression feature selection
 cat("\n4. Lasso regression feature selection...\n")
@@ -124,31 +124,31 @@ if(length(selected_lasso) > 0) {
   lasso_coef_df <- data.frame(Metabolite = character(), Coefficient = numeric())
 }
 
-cat("  Lasso regression selected", length(selected_lasso), "metabolites\n")
+cat("  Lasso regression selected ", length(selected_lasso), " metabolites\n")
 
 # Visualize Lasso coefficients
 if(nrow(lasso_coef_df) > 0) {
-  lasso_top20 <- head(lasso_coef_df, 20)
-  lasso_top20$Metabolite <- factor(lasso_top20$Metabolite,
-                                   levels = rev(lasso_top20$Metabolite))
+  lasso_plot_data <- lasso_coef_df
+  lasso_plot_data$Metabolite <- factor(lasso_plot_data$Metabolite,
+                                       levels = rev(lasso_plot_data$Metabolite))
   
-  p_lasso <- ggplot(lasso_top20, aes(x = Coefficient, y = Metabolite, 
-                                     fill = Coefficient > 0)) +
+  p_lasso <- ggplot(lasso_plot_data, aes(x = Coefficient, y = Metabolite, 
+                                         fill = Coefficient > 0)) +
     geom_col(width = 0.7) +
     scale_fill_manual(values = c("red", "blue"), 
-                      labels = c("Negatively Associated", "Positively Associated"),
-                      name = "Association with Sarcopenia") +
-    labs(x = "Lasso Regression Coefficients",
+                      labels = c("Negative association", "Positive association"),
+                      name = "Association with sarcopenia") +
+    labs(x = "Lasso Regression Coefficient",
          y = NULL,
-         title = "Metabolites and Coeffients by Lasso Regression (Top 20)",
-         subtitle = "Positive associations stands for up-regulation in group Old") +
+         title = paste("Metabolites Selected by Lasso Regression (n =", nrow(lasso_coef_df), ")"),
+         subtitle = "Positive coefficient indicates up-regulation in Old group") +
     theme_bw() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"),
           plot.subtitle = element_text(hjust = 0.5),
           axis.text.y = element_text(size = 9))
   
-  ggsave("Lasso_Coefficients_Top20.png", p_lasso, width = 10, height = 7, dpi = 600)
-  cat("  ✅ LaLasso coefficients plot saved\n")
+  ggsave("Lasso_Coefficients.png", p_lasso, width = 10, height = max(4, nrow(lasso_coef_df)*0.5), dpi = 600)
+  cat("  ✅ Lasso coefficients plot saved\n")
 }
 
 # 5. Method 3: Linear SVM feature selection
@@ -268,7 +268,7 @@ if(length(high_confidence_metabolites) > 0) {
   ) %>% arrange(desc(SelectedBy), desc(VIP_Score))
   
   write.csv(summary_table, "MultiMethod_Feature_Selection_Summary.csv", row.names = FALSE)
-  cat("\n  ✅ 多Multi-method feature selection summary table saved\n")
+  cat("\n  ✅ Multi-method feature selection summary table saved\n")
 }
 
 # 7. Visualize high-confidence metabolites
@@ -304,40 +304,80 @@ if(length(high_confidence_metabolites) >= 3) {
   cat("  Due to limited sample size (n=10), this study focuses on biomarker discovery rather than model construction\n")
   cat("  Expression patterns of high-confidence metabolites between two groups:\n")
   
-  # 8.1 Draw heatmap to show expression patterns
-  library(pheatmap)
-  
-  # Use Top 20 high-confidence metabolites
-  top_20_metabolites <- head(high_conf_df[order(-high_conf_df$SelectedBy, 
-                                                -high_conf_df$VIP_Score), ], 20)$Metabolite
-  
-  expr_top20 <- X[, top_20_metabolites]
-  
-  # Create annotations
-  annotation_col <- data.frame(Group = Y)
-  rownames(annotation_col) <- rownames(X)
-  
-  annotation_row <- data.frame(
-    SelectedBy = factor(high_conf_df$SelectedBy[match(top_20_metabolites, 
-                                                      high_conf_df$Metabolite)])
-  )
-  rownames(annotation_row) <- top_20_metabolites
-  
-  pheatmap(expr_top20,
-           scale = "row",
-           clustering_method = "complete",
-           annotation_col = annotation_col,
-           annotation_row = annotation_row,
-           show_colnames = TRUE,
-           show_rownames = TRUE,
-           fontsize_row = 8,
-           fontsize_col = 8,
-           color = colorRampPalette(c("blue", "white", "red"))(100),
-           main = "Top 20 High-Confidence Metabolites Expression Heatmap",
-           filename = "Top20_HighConfidence_Heatmap.png",
-           width = 8, height = 7)
-  
-  cat("  ✅ TTop 20 high-confidence metabolites heatmap saved\n")
+  # 8.1 Creating heatmap for high confidence metabolites 
+  if(length(high_confidence_metabolites) >= 3) {
+    
+    cat("  Creating heatmap for high confidence metabolites...\n")
+    
+    # Extracting top 10 metabolites
+    top_n <- min(10, nrow(high_conf_df))
+    top_metabolites <- head(high_conf_df[order(-high_conf_df$SelectedBy, 
+                                               -high_conf_df$VIP_Score), ], top_n)$Metabolite
+    
+    # Making sure metabolites are in my data
+    top_metabolites <- top_metabolites[top_metabolites %in% colnames(X)]
+    
+    if(length(top_metabolites) > 1) {
+      # Preparing the data
+      plot_data <- as.data.frame(X[, top_metabolites])
+      plot_data$Sample <- rownames(X)
+      plot_data$Group <- Y
+      
+      # Convert to the long form
+      plot_data_long <- plot_data %>%
+        pivot_longer(cols = -c(Sample, Group), 
+                     names_to = "Metabolite", 
+                     values_to = "Expression") %>%
+        mutate(Metabolite = factor(Metabolite, levels = top_metabolites))
+      
+      # Data normalizing by rows
+      plot_data_scaled <- plot_data_long %>%
+        group_by(Metabolite) %>%
+        mutate(Expression_scaled = scale(Expression)) %>%
+        ungroup()
+      
+      # Creating heatmap
+      p <- ggplot(plot_data_scaled, aes(x = Sample, y = Metabolite, fill = Expression_scaled)) +
+        geom_tile() +
+        scale_fill_gradient2(low = "blue", mid = "white", high = "red", 
+                             midpoint = 0, name = "Expression\n(z-score)") +
+        facet_grid(~Group, scales = "free_x", space = "free_x") +
+        labs(x = "Samples", y = "Metabolites",
+             title = paste("Top", length(top_metabolites), "High-Confidence Metabolites Expression"),
+             subtitle = "Rows scaled to z-score") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+              axis.text.y = element_text(size = 9),
+              strip.background = element_rect(fill = "lightgray"),
+              plot.title = element_text(hjust = 0.5, face = "bold"),
+              plot.subtitle = element_text(hjust = 0.5))
+      
+      ggsave("Top_HighConfidence_Metabolites_Heatmap_ggplot.png", p, 
+             width = 10, height = 6, dpi = 600)
+      cat("  ✅ ggplot heatmap is saved!\n")
+    } 
+    
+    # Adding metabolites annotations
+    # Creating another plot to display metabolites' properties
+    if(length(top_metabolites) > 0) {  
+      metab_info <- high_conf_df[match(top_metabolites, high_conf_df$Metabolite), 
+                                 c("Metabolite", "SelectedBy", "VIP_Score")]
+      metab_info$SelectedBy <- factor(metab_info$SelectedBy)
+      
+      p2 <- ggplot(metab_info, aes(x = Metabolite, y = VIP_Score, fill = SelectedBy)) +
+        geom_bar(stat = "identity") +
+        labs(x = "Metabolite", y = "VIP Score", 
+             title = "Metabolite Properties",
+             fill = "Selected by\n(methods)") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              plot.title = element_text(hjust = 0.5, face = "bold"))
+      
+      ggsave("Metabolite_Properties_Bar.png", p2, width = 10, height = 5, dpi = 600)
+      cat("  ✅ Metabolite Properties Bar plot is saved!\n")
+    }
+    
+  } # 闭合内层 if(length(high_confidence_metabolites) >= 3)
   
   # 8.2 Simple descriptive statistics
   cat("\n  Descriptive statistics of high-confidence metabolites:\n")
@@ -353,22 +393,35 @@ if(length(high_confidence_metabolites) >= 3) {
   
   # 8.3 Top metabolites' regulation direction
   cat("\n  Regulation direction of Top 5 high-confidence metabolites (Old vs Young):\n")
-  top5_expr <- X[, head(high_conf_df$Metabolite, 5)]
   
-  # Calculate MEAN values for each group
-  for(i in 1:5) {
-    metab <- colnames(top5_expr)[i]
-    young_mean <- mean(top5_expr[Y == "Young", i])
-    old_mean <- mean(top5_expr[Y == "Old", i])
-    fold_change <- old_mean / young_mean
+  # Making sure for enough metabolites
+  if(nrow(high_conf_df) >= 5) {
+    top5_metabolites <- head(high_conf_df$Metabolite, 5)
+    top5_metabolites <- top5_metabolites[top5_metabolites %in% colnames(X)]
     
-    direction <- ifelse(fold_change > 1, "Up-regulate", "Down-regulate")
-    cat(sprintf("    %d. %s: Group Old/Group Young = %.2f (%s)\n", 
-                i, metab, fold_change, direction))
+    if(length(top5_metabolites) > 0) {
+      top5_expr <- X[, top5_metabolites, drop = FALSE]
+      
+      # Calculate MEAN values for each group
+      for(i in 1:length(top5_metabolites)) {
+        metab <- top5_metabolites[i]
+        young_mean <- mean(top5_expr[Y == "Young", i])
+        old_mean <- mean(top5_expr[Y == "Old", i])
+        fold_change <- old_mean / young_mean
+        
+        direction <- ifelse(fold_change > 1, "Up-regulate", "Down-regulate")
+        cat(sprintf("    %d. %s: Group Old/Group Young = %.2f (%s)\n", 
+                    i, metab, fold_change, direction))
+      }
+    } else {
+      cat("    No top metabolites found in the data.\n")
+    }
+  } else {
+    cat("    Less than 5 high-confidence metabolites available.\n")
   }
   
-} else {
-  cat("  Not enough high confidence metabolite (<3)\n")
+} else {  
+  cat("  Less than 3 high-confidence metabolites available, skipping discriminative analysis.\n")
 }
 
 # 9. Generating final analysis report
