@@ -45,7 +45,7 @@ plsda_result <- opls(x = data_matrix_filtered,   # Use preprocessed data
                      y = group_factor,           # Grouping factor
                      predI = 2,                  # Principal Components 
                      scaleC = "standard",        # ropls's own way of normalization(scaleC= standard)
-                     crossvalI = 7,              # ropls's default number of crossvalidation
+                     crossvalI = 7,              # ropls's default number of cross-validation: 7-fold 
                      info.txtC = "none",         # no long and complex info output
                      fig.pdfC = "none")          # no auto-save PDF ver.
 
