@@ -9,6 +9,7 @@ Coding backup : Sarcopenia Metabolomics
 - 公共数据集：Metabolomics Workbench ST001179
 - 样本：10只小鼠（青年组5只，老年组5只）
 - 代谢物：175个
+- 原始数据文件名：Combined_PosNeg_Metabolite_Data.csv
 
 ## 代码结构
 1. `01_data_preprocessing.R` - 数据清洗与预处理
